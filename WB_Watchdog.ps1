@@ -13,8 +13,12 @@ $ApplicationsToMonitor = @(
 #    @{ Name = "WB Creative"; Path = "C:\NEXUS-V3\Server_WB-Instance-Creative\Torch.Server.exe"; ProcessName = "Torch.Server" }
 )
 
-# Discord Webhook URL
-$DiscordWebhookUrl = "<YOUR_DISCORD_WEBHOOK_URL>"
+# Discord webhook is read from a Windows environment variable (not stored in this script).
+$DiscordWebhookUrl = [Environment]::GetEnvironmentVariable("WB_WATCHDOG_DISCORD_WEBHOOK", "Machine")
+if ([string]::IsNullOrWhiteSpace($DiscordWebhookUrl)) {
+    # Also allow a user-level variable when running interactively.
+    $DiscordWebhookUrl = [Environment]::GetEnvironmentVariable("WB_WATCHDOG_DISCORD_WEBHOOK", "User")
+}
 
 # How often to check (in seconds)
 $CheckIntervalSeconds = 60
@@ -71,7 +75,7 @@ function Test-DiscordWebhook {
     $TestMessage = "**WB Watchdog** Starting Script and Testing Webhook."
 
     if (-not $DiscordWebhookUrl) {
-        Write-Host "Discord Webhook URL is not configured. Please update the `$DiscordWebhookUrl variable with your actual webhook URL." -ForegroundColor Cyan -BackgroundColor Red
+        Write-Host "Discord Webhook URL is not configured. Set the WB_WATCHDOG_DISCORD_WEBHOOK Windows environment variable to your webhook URL." -ForegroundColor Cyan -BackgroundColor Red
         return $false # Indicate failure
     }
 
@@ -123,10 +127,10 @@ function Stop-AndVerifyProcesses {
             $stillThere = Get-Process -Id $id -ErrorAction SilentlyContinue
             if ($stillThere) {
                 try {
-                    Write-Host "[RECOVERY] Force-stopping '$AppName' PID $id (attempt $attempt)." -ForegroundColor Yellow
+                    Write-Host "[RECOVERY] Force-stopping '$AppName' PID $id (attempt $attempt)." -ForegroundColor Blue -BackgroundColor DarkYellow
                     Stop-Process -Id $id -Force -ErrorAction Stop
                 } catch {
-                    Write-Host "[RECOVERY] Stop request for PID $id reported: $($_.Exception.Message)" -ForegroundColor Yellow
+                    Write-Host "[RECOVERY] Stop request for PID $id reported: $($_.Exception.Message)" -ForegroundColor Blue -BackgroundColor Yellow
                 }
             }
         }
@@ -136,21 +140,21 @@ function Stop-AndVerifyProcesses {
             Start-Sleep -Seconds $TerminationPollSeconds
             $remaining = @($targetIds | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
             if ($remaining.Count -eq 0) {
-                Write-Host "[RECOVERY] All targeted PIDs for '$AppName' have exited." -ForegroundColor Green
+                Write-Host "[RECOVERY] All targeted PIDs for '$AppName' have exited." -ForegroundColor Blue -BackgroundColor Green
                 return $true
             }
-            Write-Host "[RECOVERY] '$AppName' still has targeted PID(s): $($remaining -join ', '). Polling again..." -ForegroundColor Yellow
+            Write-Host "[RECOVERY] '$AppName' still has targeted PID(s): $($remaining -join ', '). Polling again..." -ForegroundColor Blue -BackgroundColor DarkYellow
         } while ((Get-Date) -lt $deadline)
 
         if ($attempt -eq 1) {
-            Write-Host "[RECOVERY] 20-second wait expired for '$AppName'. Issuing one more forced termination attempt." -ForegroundColor Yellow
+            Write-Host "[RECOVERY] 20-second wait expired for '$AppName'. Issuing one more forced termination attempt." -ForegroundColor Blue -BackgroundColor DarkYellow
         }
     }
 
     $remaining = @($targetIds | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
     if ($remaining.Count -gt 0) {
         $message = ":x: **Watchdog could not terminate $AppName**. Remaining PID(s): $($remaining -join ', '). Restart aborted."
-        Write-Host "[RECOVERY] $message" -ForegroundColor Red
+        Write-Host "[RECOVERY] $message" -ForegroundColor Cyan -BackgroundColor Red
         Send-DiscordNotification -Message $message
         return $false
     }
@@ -168,19 +172,19 @@ function Start-VerifiedApplication {
     # Recheck immediately before launch; never create a duplicate knowingly.
     $existing = @(Get-MatchingProcesses -ProcessName $ProcessName -ProcessPath $ProcessPath)
     if ($existing.Count -gt 0) {
-        Write-Host "[RECOVERY] Restart of '$AppName' aborted: matching PID(s) appeared: $($existing.Id -join ', ')." -ForegroundColor Red
+        Write-Host "[RECOVERY] Restart of '$AppName' aborted: matching PID(s) appeared: $($existing.Id -join ', ')." -ForegroundColor Cyan -BackgroundColor Red
         return $false
     }
 
     try {
-        Write-Host "[RECOVERY] Starting '$AppName' after $Reason." -ForegroundColor Yellow
+        Write-Host "[RECOVERY] Starting '$AppName' after $Reason." -ForegroundColor Blue -BackgroundColor DarkYellow
         Start-Process -FilePath $ProcessPath -ErrorAction Stop
         $message = ":white_check_mark: **$AppName** ($ProcessName) was restarted after $Reason."
         Send-DiscordNotification -Message $message
         return $true
     } catch {
         $message = ":x: **Error restarting $AppName** ($ProcessName): $($_.Exception.Message)"
-        Write-Host "[RECOVERY] $message" -ForegroundColor Red
+        Write-Host "[RECOVERY] $message" -ForegroundColor Cyan -BackgroundColor Red
         Send-DiscordNotification -Message $message
         return $false
     }
@@ -270,7 +274,7 @@ foreach ($app in $ApplicationsToMonitor) {
     # Duplicate detection runs before CPU sampling. Terminate every matching PID.
     if ($processes.Count -gt 1) {
         $duplicateIds = @($processes | ForEach-Object { [int]$_.Id })
-        Write-Host "[MONITOR] DUPLICATE DETECTED for '$appName'. Matching PIDs: $($duplicateIds -join ', '). Terminating all." -ForegroundColor Red
+        Write-Host "[MONITOR] DUPLICATE DETECTED for '$appName'. Matching PIDs: $($duplicateIds -join ', '). Terminating all." -ForegroundColor Cyan -BackgroundColor Red
         $stopped = Stop-AndVerifyProcesses -ProcessIds $duplicateIds -AppName $appName -ProcessName $processName -ProcessPath $processPath
         if ($stopped) {
             # Recheck path after termination; if anything remains, do not start another copy.
@@ -279,7 +283,7 @@ foreach ($app in $ApplicationsToMonitor) {
                 [void](Start-VerifiedApplication -AppName $appName -ProcessName $processName -ProcessPath $processPath -Reason "duplicate-process cleanup")
             } else {
                 $message = ":x: **$appName** still has matching PID(s) after duplicate cleanup: $(($remainingMatches | ForEach-Object Id) -join ', '). Restart aborted."
-                Write-Host "[MONITOR] $message" -ForegroundColor Red
+                Write-Host "[MONITOR] $message" -ForegroundColor Cyan -BackgroundColor Red
                 Send-DiscordNotification -Message $message
             }
         }
@@ -287,18 +291,18 @@ foreach ($app in $ApplicationsToMonitor) {
     }
 
     if ($processes.Count -eq 0) {
-        Write-Host "[MONITOR] '$appName' is NOT running. Attempting to start..." -ForegroundColor Yellow
+        Write-Host "[MONITOR] '$appName' is NOT running. Attempting to start..." -ForegroundColor Blue -BackgroundColor Yellow
         [void](Start-VerifiedApplication -AppName $appName -ProcessName $processName -ProcessPath $processPath -Reason "it was not running")
         continue
     }
 
     # Exactly one matching process remains.
     $process = $processes[0]
-    Write-Host "[MONITOR] '$appName' is running. PID: $($process.Id)." -ForegroundColor Green
+    Write-Host "[MONITOR] '$appName' is running. PID: $($process.Id)." -ForegroundColor Blue -BackgroundColor Green
 
     # Exclude Nexus Controller from freeze check.
     if ($appName -eq "Nexus Controller") {
-        Write-Host "[MONITOR] Skipping freeze check for Nexus Controller." -ForegroundColor Yellow
+        Write-Host "[MONITOR] Skipping freeze check for Nexus Controller." -ForegroundColor Blue -BackgroundColor Yellow
         continue
     }
 
@@ -311,21 +315,21 @@ foreach ($app in $ApplicationsToMonitor) {
         $endCpuTime = $sampledProcess.CPU
         $cpuUsage = (($endCpuTime - $startCpuTime) / $sampleInterval) * 100
     } catch {
-        Write-Host "[MONITOR] PID $($process.Id) exited or became unavailable during CPU sampling. Next cycle will re-evaluate." -ForegroundColor Yellow
+        Write-Host "[MONITOR] PID $($process.Id) exited or became unavailable during CPU sampling. Next cycle will re-evaluate." -ForegroundColor Blue -BackgroundColor Yellow
         continue
     }
 
-    Write-Host "[MONITOR] CPU Usage for '$appName': $cpuUsage%." -ForegroundColor Green
+    Write-Host "[MONITOR] CPU Usage for '$appName': $cpuUsage%." -ForegroundColor Blue -BackgroundColor Green
 
     if ($cpuUsage -lt $FrozenCpuThreshold) {
-        Write-Host "[MONITOR] '$appName' appears frozen (CPU < $($FrozenCpuThreshold)%)." -ForegroundColor Red
+        Write-Host "[MONITOR] '$appName' appears frozen (CPU < $($FrozenCpuThreshold)%)." -ForegroundColor Cyan -BackgroundColor Red
         $stopped = Stop-AndVerifyProcesses -ProcessIds @([int]$process.Id) -AppName $appName -ProcessName $processName -ProcessPath $processPath
         if ($stopped) {
             # If a matching process appeared during termination, clean it up too before restart.
             $lateMatches = @(Get-MatchingProcesses -ProcessName $processName -ProcessPath $processPath)
             if ($lateMatches.Count -gt 0) {
                 $lateIds = @($lateMatches | ForEach-Object { [int]$_.Id })
-                Write-Host "[MONITOR] Matching PID(s) appeared during freeze recovery: $($lateIds -join ', '). Terminating before restart." -ForegroundColor Yellow
+                Write-Host "[MONITOR] Matching PID(s) appeared during freeze recovery: $($lateIds -join ', '). Terminating before restart." -ForegroundColor Blue -BackgroundColor DarkYellow
                 $stopped = Stop-AndVerifyProcesses -ProcessIds $lateIds -AppName $appName -ProcessName $processName -ProcessPath $processPath
             }
             if ($stopped) {
@@ -334,13 +338,13 @@ foreach ($app in $ApplicationsToMonitor) {
                     [void](Start-VerifiedApplication -AppName $appName -ProcessName $processName -ProcessPath $processPath -Reason "freeze recovery")
                 } else {
                     $message = ":x: **$appName** still has matching PID(s) after freeze recovery: $(($finalMatches | ForEach-Object Id) -join ', '). Restart aborted."
-                    Write-Host "[MONITOR] $message" -ForegroundColor Red
+                    Write-Host "[MONITOR] $message" -ForegroundColor Cyan -BackgroundColor Red
                     Send-DiscordNotification -Message $message
                 }
             }
         }
     } else {
-        Write-Host "[MONITOR] '$appName' is running normally (CPU >= $($FrozenCpuThreshold)%)." -ForegroundColor Green
+        Write-Host "[MONITOR] '$appName' is running normally (CPU >= $($FrozenCpuThreshold)%)." -ForegroundColor Blue -BackgroundColor Green
     }
 }
 
