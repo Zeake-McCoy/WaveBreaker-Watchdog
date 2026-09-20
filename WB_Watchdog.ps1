@@ -344,7 +344,7 @@ foreach ($app in $ApplicationsToMonitor) {
             }
         }
     } else {
-        Write-Host "[MONITOR] '$appName' is running normally (CPU >= $($FrozenCpuThreshold)%)." -ForegroundColor Blue -BackgroundColor Green
+        Write-Host "[MONITOR] '$appName' is running normally (CPU >= $($FrozenCpuThreshold)%)." -ForegroundColor Blue -BackgroundColor DarkGreen
     }
 }
 
